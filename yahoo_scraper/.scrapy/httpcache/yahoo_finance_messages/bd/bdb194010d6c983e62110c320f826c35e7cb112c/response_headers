@@ -1,0 +1,24 @@
+Content-Length: 474
+X-Amz-Id-2: 5KrCDQY01BOUzE6Db8vjaXppvUi69smJCpACZRCKgXBuaApyNtReGSdz+6gokVVAHpQjhZhpsvw=
+X-Amz-Request-Id: TV8RJH85Y14ENF4Z
+Date: Thu, 27 Feb 2025 09:52:47 GMT
+Last-Modified: Fri, 14 Feb 2025 19:39:39 GMT
+X-Amz-Server-Side-Encryption: AES256
+Cache-Control: public, max-age=3600
+Accept-Ranges: bytes
+Content-Type: text/plain
+Server: ATS
+Referrer-Policy: no-referrer-when-downgrade
+Vary: Origin, Accept-Encoding
+Ats-Carp-Promotion: 1
+Content-Encoding: gzip
+Strict-Transport-Security: max-age=31536000
+Content-Security-Policy: frame-ancestors 'self' https://*.builtbygirls.com https://*.rivals.com https://*.engadget.com https://*.intheknow.com https://*.autoblog.com https://*.techcrunch.com https://*.yahoo.com https://*.aol.com https://*.huffingtonpost.com https://*.oath.com https://*.search.yahoo.com https://*.pnr.ouryahoo.com https://pnr.ouryahoo.com https://*.search.aol.com https://*.search.huffpost.com https://*.onesearch.com https://*.verizonmedia.com https://*.publishing.oath.com https://*.autoblog.com; sandbox allow-forms allow-same-origin allow-scripts allow-popups allow-popups-to-escape-sandbox allow-presentation; report-uri https://csp.yahoo.com/beacon/csp?src=ats&site=finance&region=US&lang=en-US&device=desktop&yrid=6fa6sl5js0dff&partner=;
+X-Content-Type-Options: nosniff
+X-Xss-Protection: 1; mode=block
+X-Frame-Options: SAMEORIGIN
+Etag: "ca879c76a1767d4be15b51e8ef8ed8a7-df"
+Age: 0
+Set-Cookie: A1=d=AQABBO81wGcCEAeCZJGNzII4E8e2Yo7rPG8FEgEBAQGHwWfKZ1kTyyMA_eMAAA&S=AQAAArZyHW5G5lRERhzwZ73Wcqs; Expires=Fri, 27 Feb 2026 15:52:47 GMT; Max-Age=31557600; Domain=.yahoo.com; Path=/; SameSite=Lax; Secure; HttpOnly
+Set-Cookie: A3=d=AQABBO81wGcCEAeCZJGNzII4E8e2Yo7rPG8FEgEBAQGHwWfKZ1kTyyMA_eMAAA&S=AQAAArZyHW5G5lRERhzwZ73Wcqs; Expires=Fri, 27 Feb 2026 15:52:47 GMT; Max-Age=31557600; Domain=.yahoo.com; Path=/; SameSite=None; Secure; HttpOnly
+Set-Cookie: A1S=d=AQABBO81wGcCEAeCZJGNzII4E8e2Yo7rPG8FEgEBAQGHwWfKZ1kTyyMA_eMAAA&S=AQAAArZyHW5G5lRERhzwZ73Wcqs; Domain=.yahoo.com; Path=/; SameSite=Lax; Secure
