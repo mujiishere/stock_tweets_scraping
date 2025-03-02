@@ -1,372 +1,255 @@
 import scrapy
-from scrapy.http import FormRequest
 import datetime
-from dateutil.parser import parse
-import logging
-import re
-import json
+import csv
 import os
+import json
+import logging
+import argparse
+import time
+from urllib.parse import urlencode
 
-class YahooFinanceMessageBoardSpider(scrapy.Spider):
-    name = 'yahoo_finance_messages'
-    
-    # Custom settings
+
+class YahooFinanceHistoricalDataSpider(scrapy.Spider):
+    name = 'yahoo_finance_historical_data'
+
+
     custom_settings = {
         'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'DOWNLOAD_DELAY': 3,  # Increased delay
-        'ROBOTSTXT_OBEY': True,
+        'DOWNLOAD_DELAY': 3,
+        'ROBOTSTXT_OBEY': False,
         'CONCURRENT_REQUESTS': 1,
-        'COOKIES_ENABLED': True,  # Enable cookies
-        'DOWNLOAD_TIMEOUT': 30,
-        'HTTPERROR_ALLOWED_CODES': [404],
-        'DEFAULT_REQUEST_HEADERS': {
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Connection': 'keep-alive',
-        }
+        'COOKIES_ENABLED': True,
+        'DOWNLOAD_TIMEOUT': 60,
     }
-    
-    def __init__(self, *args, **kwargs):
-        super(YahooFinanceMessageBoardSpider, self).__init__(*args, **kwargs)
-        
-        # Define the 10 stock symbols you want to scrape
-        self.stock_symbols = [
-            'AAPL',  # Apple
-            'MSFT',  # Microsoft
-            'GOOG',  # Google
-            'AMZN',  # Amazon
-            'FB',    # Facebook (now META, but was FB during your target period)
-            'NFLX',  # Netflix
-            'TSLA',  # Tesla
-            'JPM',   # JPMorgan
-            'WMT',   # Walmart
-            'XOM',   # ExxonMobil
-        ]
-        
-        # Define the date range
-        self.start_date = datetime.datetime(2012, 7, 23)
-        self.end_date = datetime.datetime(2013, 7, 19)
-        
-        # Create output directory if it doesn't exist
+
+    def __init__(self, symbols=None, start_date=None, end_date=None, *args, **kwargs):
+        super(YahooFinanceHistoricalDataSpider, self).__init__(*args, **kwargs)
+
+        # Define the stock symbols you want to scrape (default or from user input)
+        if symbols:
+            self.stock_symbols = symbols.split(',')
+        else:
+            self.stock_symbols = [
+                'AAPL',  # Apple
+                'MSFT',  # Microsoft
+                'GOOG',  # Google
+                'AMZN',  # Amazon
+                'META',  # Facebook (formerly FB)
+                'NFLX',  # Netflix
+                'TSLA',  # Tesla
+                'JPM',  # JPMorgan
+                'WMT',  # Walmart
+                'XOM',  # ExxonMobil
+            ]
+
+        try:
+            if start_date:
+                self.start_date = datetime.datetime.strptime(start_date, "%Y-%m-%d")
+            else:
+                # Default to one year ago
+                self.start_date = datetime.datetime.now() - datetime.timedelta(days=365)
+
+            if end_date:
+                self.end_date = datetime.datetime.strptime(end_date, "%Y-%m-%d")
+            else:
+                # Default to today
+                self.end_date = datetime.datetime.now()
+
+        except ValueError as e:
+            self.logger.error(f"Date format error: {e}. Use YYYY-MM-DD format.")
+            self.start_date = datetime.datetime.now() - datetime.timedelta(days=365)
+            self.end_date = datetime.datetime.now()
+
+
+        self.start_timestamp = int(self.start_date.timestamp())
+        self.end_timestamp = int(self.end_date.timestamp())
+
+        self.logger.info(f"Date range: {self.start_date.strftime('%Y-%m-%d')} to {self.end_date.strftime('%Y-%m-%d')}")
+        self.logger.info(f"Symbols to scrape: {', '.join(self.stock_symbols)}")
+
+
         if not os.path.exists('output'):
             os.makedirs('output')
-    
+
     def start_requests(self):
-        """Start the scraping process for each stock symbol."""
+        """Start the scraping process for each stock symbol, using direct CSV download."""
         for symbol in self.stock_symbols:
-            # Just use the modern URL for now
-            modern_url = f'https://finance.yahoo.com/quote/{symbol}/community?p={symbol}'
-            
+            params = {
+                'period1': self.start_timestamp,
+                'period2': self.end_timestamp,
+                'interval': '1d',
+                'events': 'history',
+                'includeAdjustedClose': 'true',
+                'download': 'true'  # This is important for CSV download
+            }
+
+            url = f"https://query1.finance.yahoo.com/v7/finance/download/{symbol}?{urlencode(params)}"
+
+            self.logger.info(f"Fetching historical data for {symbol} from {url}")
+
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/csv,application/csv,text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Connection': 'keep-alive',
+                'Referer': f'https://finance.yahoo.com/quote/{symbol}/history',
+                'Origin': 'https://finance.yahoo.com',
+            }
+
             yield scrapy.Request(
-                url=modern_url,
-                callback=self.parse_conversation_page,
+                url=url,
+                callback=self.parse_csv_download,
                 meta={'symbol': symbol},
-                dont_filter=True,
+                headers=headers,
                 errback=self.handle_error
             )
-    
-    def handle_error(self, failure):
-        self.logger.error(f"Request failed: {failure.value}")
-        
-    def parse_conversation_page(self, response):
+
+    def parse_csv_download(self, response):
+        """Parse direct CSV download from Yahoo Finance."""
         symbol = response.meta['symbol']
-        self.logger.info(f"Processing conversations for {symbol}")
-        
-        # Create symbol directory
-        symbol_dir = f'output/{symbol}'
-        if not os.path.exists(symbol_dir):
-            os.makedirs(symbol_dir)
-            
-        # Save raw HTML for debugging
-        with open(f'{symbol_dir}/raw_page.html', 'w', encoding='utf-8') as f:
-            f.write(response.text)
-            
-        # Try to find the React app data
-        scripts = response.xpath('//script/text()').getall()
-        for script in scripts:
-            if 'root.App.main' in script:
-                try:
-                    data_match = re.search(r'root\.App\.main\s*=\s*({.*});', script)
-                    if data_match:
-                        data = json.loads(data_match.group(1))
-                        
-                        # Save raw JSON data
-                        with open(f'{symbol_dir}/raw_data.json', 'w', encoding='utf-8') as f:
-                            json.dump(data, f, indent=2)
-                            
-                        # Try to extract messages
-                        self.extract_messages_from_data(data, symbol)
-                except Exception as e:
-                    self.logger.error(f"Error processing script data for {symbol}: {str(e)}")
-    
-    def extract_messages_from_data(self, data, symbol):
+        self.logger.info(f"Processing CSV download for {symbol}")
+
         try:
-            # Try different paths where message data might be stored
-            stores = data.get('context', {}).get('dispatcher', {}).get('stores', {})
-            conversation_store = stores.get('ConversationStore', {})
-            
-            if conversation_store:
-                messages_data = conversation_store.get('messages', [])
-                symbol_dir = f'output/{symbol}'
-                
-                for msg in messages_data:
-                    try:
-                        created_at = parse(msg.get('created_at', ''))
-                        if self.start_date <= created_at <= self.end_date:
-                            message = {
-                                'symbol': symbol,
-                                'message_id': msg.get('messageId'),
-                                'user': msg.get('author', {}).get('username'),
-                                'content': msg.get('content'),
-                                'created_at': msg.get('created_at'),
-                                'likes': msg.get('likes_count', 0),
-                                'replies': msg.get('replies_count', 0)
-                            }
-                            
-                            # Save message
-                            filename = f"{symbol_dir}/message_{message['message_id']}.json"
-                            with open(filename, 'w', encoding='utf-8') as f:
-                                json.dump(message, f, indent=2)
-                                
-                            self.logger.info(f"Saved message {message['message_id']} for {symbol}")
-                    except Exception as e:
-                        self.logger.error(f"Error processing message: {str(e)}")
-                        
+
+            content = response.body.decode('utf-8')
+
+            if not content.startswith('Date,Open,High') and 'error' in content.lower():
+                self.logger.error(f"Error in response for {symbol}: {content}")
+                return
+
+            output_file = f'output/{symbol}_historical_data.csv'
+            with open(output_file, 'w', newline='', encoding='utf-8') as f:
+                f.write(content)
+
+            self.logger.info(f"Successfully saved CSV data for {symbol} to {output_file}")
+
         except Exception as e:
-            self.logger.error(f"Error extracting messages for {symbol}: {str(e)}")
+            self.logger.error(f"Error saving CSV data for {symbol}: {str(e)}")
+            # Save raw response for debugging
+            raw_dir = 'output/raw'
+            if not os.path.exists(raw_dir):
+                os.makedirs(raw_dir)
 
-    def parse_legacy_board(self, response):
-        """Parse the legacy message board page."""
-        symbol = response.meta['symbol']
-        self.logger.info(f"Processing legacy board for {symbol}")
-        
-        # Create symbol directory
-        symbol_dir = f'output/{symbol}'
-        if not os.path.exists(symbol_dir):
-            os.makedirs(symbol_dir)
-            
-        # Save raw HTML for debugging
-        with open(f'{symbol_dir}/legacy_raw_page.html', 'w', encoding='utf-8') as f:
-            f.write(response.text)
-        
-        # Extract messages from the legacy page structure
-        messages = response.css('table.msglist tr')
-        
-        for message in messages:
-            # Skip header rows
-            if message.css('th'):
-                continue
-                
-            # Extract message data
-            subject = message.css('td.subject a::text').get()
-            if not subject:
-                continue
-                
-            message_id = message.css('td.subject a::attr(href)').re_first(r'mid=(\d+)')
-            user = message.css('td.author a::text').get() or 'Anonymous'
-            date_str = message.css('td.date::text').get()
-            
-            if date_str:
-                try:
-                    date = parse(date_str)
-                    # Check if within date range
-                    if self.start_date <= date <= self.end_date:
-                        message_data = {
-                            'symbol': symbol,
-                            'message_id': message_id,
-                            'user': user,
-                            'title': subject,
-                            'created_at': date.isoformat()
-                        }
-                        
-                        # Save message
-                        filename = f"{symbol_dir}/legacy_message_{message_id}.json"
-                        with open(filename, 'w', encoding='utf-8') as f:
-                            json.dump(message_data, f, indent=2)
-                            
-                        self.logger.info(f"Saved legacy message {message_id} for {symbol}")
-                        
-                except Exception as e:
-                    self.logger.error(f"Error processing legacy message: {str(e)}")
-        
-        # Check for next page
-        next_page = response.css('a:contains("Next")::attr(href)').get()
-        if next_page:
-            yield response.follow(
-                next_page,
-                callback=self.parse_legacy_board,
-                meta={'symbol': symbol}
-            )
+            with open(f'{raw_dir}/{symbol}_raw_csv_response.txt', 'wb') as f:
+                f.write(response.body)
+
+    def handle_error(self, failure):
+        request = failure.request
+        symbol = request.meta.get('symbol', 'unknown')
+        self.logger.error(f"Request failed for {symbol}: {failure.value}")
 
 
-# Alternative approach using historical structure (if modern API doesn't work)
-class YahooFinanceHistoricalMessageBoardSpider(scrapy.Spider):
-    name = 'yahoo_finance_historical_messages'
-    
-    # Custom settings
-    custom_settings = {
-        'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'DOWNLOAD_DELAY': 2,
-        'ROBOTSTXT_OBEY': True,
-        'CONCURRENT_REQUESTS': 1,
-    }
-    
-    def __init__(self, *args, **kwargs):
-        super(YahooFinanceHistoricalMessageBoardSpider, self).__init__(*args, **kwargs)
-        
-        # Define the 10 stock symbols you want to scrape
-        self.stock_symbols = [
-            'AAPL',  # Apple
-            'MSFT',  # Microsoft
-            'GOOG',  # Google
-            'AMZN',  # Amazon
-            'FB',    # Facebook (now META, but was FB during your target period)
-            'NFLX',  # Netflix
-            'TSLA',  # Tesla
-            'JPM',   # JPMorgan
-            'WMT',   # Walmart
-            'XOM',   # ExxonMobil
-        ]
-        
-        # Define the date range
-        self.start_date = datetime.datetime(2012, 7, 23)
-        self.end_date = datetime.datetime(2013, 7, 19)
-        
-        # Create output directory if it doesn't exist
-        if not os.path.exists('output'):
-            os.makedirs('output')
-    
-    def start_requests(self):
-        """Start the scraping process for each stock symbol."""
-        for symbol in self.stock_symbols:
-            # This is the legacy URL structure for Yahoo Finance message boards
-            # More likely to work for historical data from 2012-2013
-            url = f'https://messages.finance.yahoo.com/mb/{symbol}'
-            
-            yield scrapy.Request(
-                url=url, 
-                callback=self.parse_legacy_board,
-                meta={'symbol': symbol}
-            )
-    
-    def parse_legacy_board(self, response):
-        """Parse the legacy message board page."""
-        symbol = response.meta['symbol']
-        self.logger.info(f"Processing legacy message board for {symbol}")
-        
-        # Extract messages from the legacy page structure
-        messages = response.css('table.msglist tr')
-        
-        for message in messages:
-            # Skip header rows
-            if message.css('th'):
-                continue
-                
-            # Extract message data
-            subject = message.css('td.subject a::text').get()
-            if not subject:
-                continue
-                
-            message_id = message.css('td.subject a::attr(href)').re_first(r'mid=(\d+)')
-            user = message.css('td.author a::text').get() or 'Anonymous'
-            date_str = message.css('td.date::text').get()
-            
-            if date_str:
-                try:
-                    date = parse(date_str)
-                    # Check if within date range
-                    if self.start_date <= date <= self.end_date:
-                        # Get message details
-                        message_url = f'https://messages.finance.yahoo.com/mb/{symbol}/message/{message_id}'
-                        
-                        yield scrapy.Request(
-                            url=message_url,
-                            callback=self.parse_legacy_message,
-                            meta={
-                                'symbol': symbol,
-                                'message_id': message_id,
-                                'subject': subject,
-                                'user': user,
-                                'date': date.isoformat()
-                            }
-                        )
-                except Exception as e:
-                    self.logger.error(f"Error parsing date {date_str}: {str(e)}")
-        
-        # Check for next page
-        next_page = response.css('a:contains("Next")::attr(href)').get()
-        if next_page:
-            yield response.follow(
-                next_page,
-                callback=self.parse_legacy_board,
-                meta={'symbol': symbol}
-            )
-    
-    def parse_legacy_message(self, response):
-        """Parse individual message details."""
-        symbol = response.meta['symbol']
-        message_id = response.meta['message_id']
-        subject = response.meta['subject']
-        user = response.meta['user']
-        date = response.meta['date']
-        
-        # Extract message content
-        content = ' '.join(response.css('div#message div.msgbody::text').getall())
-        content = content.strip()
-        
-        # Save message data
-        message_data = {
-            'symbol': symbol,
-            'message_id': message_id,
-            'user': user,
-            'title': subject,
-            'content': content,
-            'created_at': date
+        self.logger.info(f"Trying alternative method for {symbol}")
+        time.sleep(10)
+
+        # Try the v8 API endpoint as fallback
+        params = {
+            'period1': self.start_timestamp,
+            'period2': self.end_timestamp,
+            'interval': '1d',
+            'events': 'history',
+            'includeAdjustedClose': 'true'
         }
-        
-        # Create symbol directory if it doesn't exist
-        symbol_dir = f'output/{symbol}'
-        if not os.path.exists(symbol_dir):
-            os.makedirs(symbol_dir)
-        
-        # Save message to a JSON file
-        filename = f"{symbol_dir}/message_{message_id}.json"
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(message_data, f, ensure_ascii=False, indent=2)
-        
-        self.logger.info(f"Saved message {message_id} for {symbol}")
-        
-        # Check for replies
-        replies = response.css('ul.msglist li')
-        for reply in replies:
-            reply_user = reply.css('div.byuser span.username::text').get() or 'Anonymous'
-            reply_date_str = reply.css('div.byuser::text').re_first(r'\((.*?)\)')
-            reply_content = ' '.join(reply.css('div.msgbody::text').getall())
-            reply_content = reply_content.strip()
-            
-            if reply_date_str:
-                try:
-                    reply_date = parse(reply_date_str)
-                    # Check if within date range
-                    if self.start_date <= reply_date <= self.end_date:
-                        # Generate a unique ID for the reply
-                        reply_id = f"{message_id}_{replies.index(reply)}"
-                        
-                        # Save reply data
-                        reply_data = {
-                            'symbol': symbol,
-                            'message_id': reply_id,
-                            'parent_id': message_id,
-                            'user': reply_user,
-                            'content': reply_content,
-                            'created_at': reply_date.isoformat()
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?{urlencode(params)}"
+
+        yield scrapy.Request(
+            url=url,
+            callback=self.parse_historical_data,
+            meta={'symbol': symbol},
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'application/json,text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Referer': f'https://finance.yahoo.com/quote/{symbol}/history',
+            },
+            dont_filter=True
+        )
+
+    def parse_historical_data(self, response):
+        """Parse the JSON response containing historical data as fallback."""
+        symbol = response.meta['symbol']
+        self.logger.info(f"Processing historical data for {symbol}")
+
+        try:
+
+            data = json.loads(response.text)
+
+
+            result = data.get('chart', {}).get('result', [])
+            if not result or len(result) == 0:
+                self.logger.error(f"No data found for {symbol}")
+                return
+
+            result = result[0]
+
+
+            timestamps = result.get('timestamp', [])
+            quote = result.get('indicators', {}).get('quote', [{}])[0]
+            adjclose = result.get('indicators', {}).get('adjclose', [{}])[0]
+
+            opens = quote.get('open', [])
+            highs = quote.get('high', [])
+            lows = quote.get('low', [])
+            closes = quote.get('close', [])
+            volumes = quote.get('volume', [])
+            adj_closes = adjclose.get('adjclose', []) if adjclose else []
+
+            # Prepare CSV file
+            output_file = f'output/{symbol}_historical_data.csv'
+            with open(output_file, 'w', newline='') as csvfile:
+                if adj_closes:
+                    fieldnames = ['Date', 'Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
+                else:
+                    fieldnames = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
+
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+
+                # Write data rows
+                for i in range(len(timestamps)):
+                    if i < len(opens) and opens[i] is not None:
+                        date = datetime.datetime.fromtimestamp(timestamps[i]).strftime('%Y-%m-%d')
+
+                        row = {
+                            'Date': date,
+                            'Open': opens[i],
+                            'High': highs[i],
+                            'Low': lows[i],
+                            'Close': closes[i],
+                            'Volume': volumes[i]
                         }
-                        
-                        # Save reply to a JSON file
-                        filename = f"{symbol_dir}/reply_{reply_id}.json"
-                        with open(filename, 'w', encoding='utf-8') as f:
-                            json.dump(reply_data, f, ensure_ascii=False, indent=2)
-                        
-                        self.logger.info(f"Saved reply {reply_id} for message {message_id}")
-                except Exception as e:
-                    self.logger.error(f"Error parsing reply date {reply_date_str}: {str(e)}")
+
+                        if adj_closes and i < len(adj_closes):
+                            row['Adj Close'] = adj_closes[i]
+
+                        writer.writerow(row)
+
+            self.logger.info(f"Successfully saved historical data for {symbol} to {output_file}")
+
+        except Exception as e:
+            self.logger.error(f"Error processing historical data for {symbol}: {str(e)}")
+            raw_dir = 'output/raw'
+            if not os.path.exists(raw_dir):
+                os.makedirs(raw_dir)
+
+            with open(f'{raw_dir}/{symbol}_raw_json_response.txt', 'w', encoding='utf-8') as f:
+                f.write(response.text)
+
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Scrape historical stock data from Yahoo Finance')
+    parser.add_argument('--symbols', type=str, help='Comma-separated list of stock symbols (e.g. AAPL,MSFT,GOOG)')
+    parser.add_argument('--start', type=str, help='Start date in YYYY-MM-DD format')
+    parser.add_argument('--end', type=str, help='End date in YYYY-MM-DD format')
+
+    args = parser.parse_args()
+
+    from scrapy.crawler import CrawlerProcess
+    from scrapy.utils.project import get_project_settings
+
+    process = CrawlerProcess(get_project_settings())
+    process.crawl(YahooFinanceHistoricalDataSpider,
+                  symbols=args.symbols,
+                  start_date=args.start,
+                  end_date=args.end)
+    process.start()
